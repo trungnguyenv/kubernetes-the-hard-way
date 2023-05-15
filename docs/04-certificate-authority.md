@@ -112,10 +112,9 @@ Kubernetes uses a [special-purpose authorization mode](https://kubernetes.io/doc
 Generate a certificate and private key for each Kubernetes worker node:
 
 ```
-for instance in worker-0 worker-1 worker-2; do
-cat > ${instance}-csr.json <<EOF
+cat > k8s-work-01-csr.json <<EOF
 {
-  "CN": "system:node:${instance}",
+  "CN": "system:node:k8s-work-01",
   "key": {
     "algo": "rsa",
     "size": 2048
@@ -132,31 +131,41 @@ cat > ${instance}-csr.json <<EOF
 }
 EOF
 
-EXTERNAL_IP=$(gcloud compute instances describe ${instance} \
-  --format 'value(networkInterfaces[0].accessConfigs[0].natIP)')
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -hostname=k8s-work-01,192.168.66.4 \
+  -profile=kubernetes \
+  k8s-work-01-csr.json | cfssljson -bare k8s-work-01
 
-INTERNAL_IP=$(gcloud compute instances describe ${instance} \
-  --format 'value(networkInterfaces[0].networkIP)')
+cat > k8s-work-02-csr.json <<EOF
+{
+  "CN": "system:node:k8s-work-02",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:nodes",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
 
 cfssl gencert \
   -ca=ca.pem \
   -ca-key=ca-key.pem \
   -config=ca-config.json \
-  -hostname=${instance},${EXTERNAL_IP},${INTERNAL_IP} \
+  -hostname=k8s-work-02,192.168.66.5 \
   -profile=kubernetes \
-  ${instance}-csr.json | cfssljson -bare ${instance}
-done
-```
+  k8s-work-02-csr.json | cfssljson -bare k8s-work-02
 
-Results:
-
-```
-worker-0-key.pem
-worker-0.pem
-worker-1-key.pem
-worker-1.pem
-worker-2-key.pem
-worker-2.pem
 ```
 
 ### The Controller Manager Client Certificate
@@ -164,8 +173,6 @@ worker-2.pem
 Generate the `kube-controller-manager` client certificate and private key:
 
 ```
-{
-
 cat > kube-controller-manager-csr.json <<EOF
 {
   "CN": "system:kube-controller-manager",
@@ -192,7 +199,6 @@ cfssl gencert \
   -profile=kubernetes \
   kube-controller-manager-csr.json | cfssljson -bare kube-controller-manager
 
-}
 ```
 
 Results:
@@ -299,10 +305,6 @@ Generate the Kubernetes API Server certificate and private key:
 ```
 {
 
-KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
-  --region $(gcloud config get-value compute/region) \
-  --format 'value(address)')
-
 KUBERNETES_HOSTNAMES=kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster,kubernetes.svc.cluster.local
 
 cat > kubernetes-csr.json <<EOF
@@ -328,7 +330,7 @@ cfssl gencert \
   -ca=ca.pem \
   -ca-key=ca-key.pem \
   -config=ca-config.json \
-  -hostname=10.32.0.1,10.240.0.10,10.240.0.11,10.240.0.12,${KUBERNETES_PUBLIC_ADDRESS},127.0.0.1,${KUBERNETES_HOSTNAMES} \
+  -hostname=10.32.0.1,192.168.66.2,192.168.66.3,127.0.0.1,k8s-cp-01,k8s-cp-02,${KUBERNETES_HOSTNAMES} \
   -profile=kubernetes \
   kubernetes-csr.json | cfssljson -bare kubernetes
 
@@ -395,20 +397,32 @@ service-account.pem
 Copy the appropriate certificates and private keys to each worker instance:
 
 ```
-for instance in worker-0 worker-1 worker-2; do
-  gcloud compute scp ca.pem ${instance}-key.pem ${instance}.pem ${instance}:~/
-done
+multipass transfer .\pki\ca.pem k8s-work-01:
+multipass transfer .\pki\k8s-work-01-key.pem k8s-work-01:
+multipass transfer .\pki\k8s-work-01.pem k8s-work-01:
+
+multipass transfer .\pki\ca.pem k8s-work-02:
+multipass transfer .\pki\k8s-work-02-key.pem k8s-work-02:
+multipass transfer .\pki\k8s-work-02.pem k8s-work-02:
 ```
 
 Copy the appropriate certificates and private keys to each controller instance:
+```
+multipass transfer .\pki\ca.pem k8s-cp-01:
+multipass transfer .\pki\ca-key.pem k8s-cp-01:
+multipass transfer .\pki\kubernetes-key.pem k8s-cp-01:
+multipass transfer .\pki\kubernetes.pem k8s-cp-01:
+multipass transfer .\pki\service-account-key.pem k8s-cp-01:
+multipass transfer .\pki\service-account.pem k8s-cp-01:
+
+multipass transfer .\pki\ca.pem k8s-cp-02:
+multipass transfer .\pki\ca-key.pem k8s-cp-02:
+multipass transfer .\pki\kubernetes-key.pem k8s-cp-02:
+multipass transfer .\pki\kubernetes.pem k8s-cp-02:
+multipass transfer .\pki\service-account-key.pem k8s-cp-02:
+multipass transfer .\pki\service-account.pem k8s-cp-02:
 
 ```
-for instance in controller-0 controller-1 controller-2; do
-  gcloud compute scp ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
-    service-account-key.pem service-account.pem ${instance}:~/
-done
-```
-
 > The `kube-proxy`, `kube-controller-manager`, `kube-scheduler`, and `kubelet` client certificates will be used to generate client authentication configuration files in the next lab.
 
 Next: [Generating Kubernetes Configuration Files for Authentication](05-kubernetes-configuration-files.md)
